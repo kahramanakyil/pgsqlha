@@ -1,0 +1,48 @@
+---
+- name: pgpass for non interactive logins to the other node
+  blockinfile:
+    path: /var/lib/pgsql/.pgpass
+    create: yes
+    mode: 0600
+    block: |
+      # hostname:port:database:username:password
+      {% for host in groups['db_hosts'] %}
+      {{ hostvars[host]['inventory_hostname'] + ':5432:replication:' + repl_user + ':' + repl_passwd}}
+      {% endfor %}
+- name: Stop database
+  systemd:
+    state: stopped
+    name: postgresql-12
+  become_user: root
+- name: Remove data
+  file:
+    state: absent
+    path: "/var/lib/pgsql/12/data/"
+- name: Check if database is already initialized
+  stat:
+    path: '/var/lib/pgsql/12/data/PG_VERSION'
+  register: init_status
+- name: Initialize the slave database
+  shell: "pg_basebackup -D /var/lib/pgsql/12/data -h {{ master_host }} -X stream -c fast -U {{ repl_user }} -w -R"
+  when: init_status.stat.exists == False
+- name: Start database
+  systemd:
+    state: started
+    name: postgresql-12
+  become_user: root
+- name: Wait for postgres to listen on port 5432
+  wait_for:
+    port: 5432
+    delay: 2
+- name: Configure recovery_target_timeline parameter
+  postgresql_set:
+    name: recovery_target_timeline
+    value: 'latest'
+  notify: Restart database
+- name: Configure DBs to listen on ip address
+  postgresql_set:
+    name: listen_addresses
+    value: 'localhost,{{ ansible_ens3.ipv4.address }}'
+  notify: Restart database
+  
+  
