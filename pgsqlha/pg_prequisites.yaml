@@ -1,0 +1,26 @@
+---
+- name: Install PostgreSQL 12 packages
+  dnf:
+    name:
+    - postgresql12
+    - postgresql12-server
+    - postgresql12-contrib
+    - python3-psycopg2
+    state: present
+- name: Enable database service on boot
+  systemd:
+    name: postgresql-12
+    enabled: yes
+- name: Open postgresql service on firewall
+  firewalld:
+    source: "{{ hostvars[item]['ansible_ens3']['ipv4']['address'] }}"
+    zone: internal
+    state: enabled
+    service: postgresql
+    permanent: yes
+  with_items: "{{ groups['db_hosts'] }}"
+- name: Reload firewalld
+  systemd:
+    state: reloaded
+    name: firewalld
+    

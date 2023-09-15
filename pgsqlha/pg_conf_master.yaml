@@ -1,0 +1,63 @@
+---
+- name: Check if database is already initialized
+  stat:
+    path: '/var/lib/pgsql/12/data/PG_VERSION'
+  register: init_status
+- name: Initialize the master database
+  shell: "/usr/pgsql-12/bin/postgresql-12-setup initdb"
+  when: init_status.stat.exists == False
+  become_user: root
+- name: Promote slave database to master
+  shell: "/usr/pgsql-12/bin/pg_ctl promote -D /var/lib/pgsql/12/data"
+  when: init_status.stat.exists == True and standby_status.stat.exists == True
+- name: Start database
+  systemd:
+    state: started
+    name: postgresql-12
+  become_user: root
+- name: Create replication user, set MD5-hashed password, grant privs
+  postgresql_user:
+    name: replusr
+    password: "{{ 'md5' + ((repl_passwd + repl_user) | hash('md5')) }}"
+    role_attr_flags: REPLICATION
+    priv: ALL
+    db: postgres
+- name: Configure DBs to listen on ip address
+  postgresql_set:
+    name: listen_addresses
+    value: 'localhost,{{ ansible_ens3.ipv4.address }}'
+- name: Configure wal_level parameter
+  postgresql_set:
+    name: wal_level
+    value: 'replica'
+- name: Configure wal_log_hints parameter
+  postgresql_set:
+    name: wal_log_hints
+    value: 'on'
+- name: Configure max_wal_senders parameter
+  postgresql_set:
+    name: max_wal_senders
+    value: '8'
+- name: Configure wal_keep_segments parameter
+  postgresql_set:
+    name: wal_keep_segments
+    value: '8'
+- name: Configure hot_standby parameter
+  postgresql_set:
+    name: hot_standby
+    value: 'on'
+- name: Enable replication user to login
+  blockinfile:
+    path: /var/lib/pgsql/12/data/pg_hba.conf
+    block: |
+      {% for host in groups['db_hosts'] %}
+      host    replication     replusr     {{ hostvars[host]['ansible_facts']['ens3']['ipv4']['address'] }}/32    md5
+      {% endfor %}
+- name: Restart database
+  systemd:
+    state: restarted
+    name: postgresql-12
+  become_user: root
+  when: standby_status.stat.exists == False
+  
+  
